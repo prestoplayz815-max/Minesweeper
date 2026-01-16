@@ -1,0 +1,592 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { Users, Flag, Timer, Trophy, MessageSquare, Settings, Moon, Sun } from 'lucide-react';
+
+// Player colors for visual distinction
+const PLAYER_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444'];
+
+const TeamMinesweeper = () => {
+  const [gameState, setGameState] = useState('lobby'); // lobby, playing, won, lost
+  const [roomCode, setRoomCode] = useState('');
+  const [joinCode, setJoinCode] = useState('');
+  const [playerName, setPlayerName] = useState('');
+  const [playerId, setPlayerId] = useState(null);
+  const [players, setPlayers] = useState([]);
+  const [board, setBoard] = useState([]);
+  const [difficulty, setDifficulty] = useState('medium');
+  const [cursorPositions, setCursorPositions] = useState({});
+  const [messages, setMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const [timer, setTimer] = useState(0);
+  const [darkMode, setDarkMode] = useState(false);
+  const [revealedCount, setRevealedCount] = useState(0);
+  const [flagCount, setFlagCount] = useState(0);
+  const [rooms, setRooms] = useState({});
+  
+  const wsRef = useRef(null);
+  const timerRef = useRef(null);
+  const boardRef = useRef(null);
+
+  // Difficulty settings
+  const difficulties = {
+    easy: { rows: 9, cols: 9, mines: 10 },
+    medium: { rows: 16, cols: 16, mines: 40 },
+    hard: { rows: 16, cols: 30, mines: 99 }
+  };
+
+  // Initialize WebSocket connection (simulated for demo)
+  useEffect(() => {
+    // In production, replace with actual WebSocket connection
+    // wsRef.current = new WebSocket('ws://localhost:3000');
+    
+    // Simulated connection for demo
+    const simulateConnection = () => {
+      return {
+        send: (data) => console.log('Sending:', data),
+        close: () => console.log('Connection closed')
+      };
+    };
+    
+    wsRef.current = simulateConnection();
+
+    return () => {
+      if (wsRef.current) wsRef.current.close();
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, []);
+
+  // Timer effect
+  useEffect(() => {
+    if (gameState === 'playing') {
+      timerRef.current = setInterval(() => {
+        setTimer(t => t + 1);
+      }, 1000);
+    } else {
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [gameState]);
+
+  // Generate board
+  const generateBoard = (rows, cols, mines) => {
+    const newBoard = Array(rows).fill(null).map(() =>
+      Array(cols).fill(null).map(() => ({
+        isMine: false,
+        isRevealed: false,
+        isFlagged: false,
+        neighborMines: 0,
+        revealedBy: null
+      }))
+    );
+
+    // Place mines randomly
+    let minesPlaced = 0;
+    while (minesPlaced < mines) {
+      const row = Math.floor(Math.random() * rows);
+      const col = Math.floor(Math.random() * cols);
+      if (!newBoard[row][col].isMine) {
+        newBoard[row][col].isMine = true;
+        minesPlaced++;
+      }
+    }
+
+    // Calculate neighbor mines
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (!newBoard[r][c].isMine) {
+          let count = 0;
+          for (let dr = -1; dr <= 1; dr++) {
+            for (let dc = -1; dc <= 1; dc++) {
+              const nr = r + dr;
+              const nc = c + dc;
+              if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && newBoard[nr][nc].isMine) {
+                count++;
+              }
+            }
+          }
+          newBoard[r][c].neighborMines = count;
+        }
+      }
+    }
+
+    return newBoard;
+  };
+
+  // Create or join room
+  const handleCreateRoom = () => {
+    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    setRoomCode(code);
+    const id = Math.random().toString(36).substring(7);
+    setPlayerId(id);
+    const newPlayer = { id, name: playerName, color: PLAYER_COLORS[0] };
+    setPlayers([newPlayer]);
+    setMessages([{ type: 'system', text: `Room ${code} created!` }]);
+    
+    // Store room in simulated "server"
+    setRooms(prev => ({
+      ...prev,
+      [code]: {
+        players: [newPlayer],
+        difficulty,
+        messages: [{ type: 'system', text: `Room ${code} created!` }]
+      }
+    }));
+  };
+
+  const handleJoinRoom = () => {
+    if (!joinCode.trim()) {
+      alert('Please enter a room code');
+      return;
+    }
+    
+    const code = joinCode.toUpperCase();
+    const room = rooms[code];
+    
+    if (!room) {
+      alert('Room not found! Please check the code.');
+      return;
+    }
+    
+    if (room.players.length >= 4) {
+      alert('Room is full! Maximum 4 players.');
+      return;
+    }
+    
+    const id = Math.random().toString(36).substring(7);
+    setPlayerId(id);
+    const playerIndex = room.players.length;
+    const newPlayer = { id, name: playerName, color: PLAYER_COLORS[playerIndex % 4] };
+    
+    const updatedPlayers = [...room.players, newPlayer];
+    const newMessage = { type: 'system', text: `${playerName} joined the room!` };
+    
+    setRoomCode(code);
+    setPlayers(updatedPlayers);
+    setMessages([...room.messages, newMessage]);
+    setDifficulty(room.difficulty);
+    
+    // Update room in simulated "server"
+    setRooms(prev => ({
+      ...prev,
+      [code]: {
+        ...room,
+        players: updatedPlayers,
+        messages: [...room.messages, newMessage]
+      }
+    }));
+  };
+
+  // Start game
+  const handleStartGame = () => {
+    const { rows, cols, mines } = difficulties[difficulty];
+    const newBoard = generateBoard(rows, cols, mines);
+    setBoard(newBoard);
+    setGameState('playing');
+    setTimer(0);
+    setRevealedCount(0);
+    setFlagCount(0);
+    setMessages([...messages, { type: 'system', text: 'Game started! Work together to clear the board!' }]);
+  };
+
+  // Reveal cell with flood fill for empty cells
+  const revealCell = (row, col) => {
+    if (!board[row] || !board[row][col]) return;
+    
+    const cell = board[row][col];
+    if (cell.isRevealed || cell.isFlagged) return;
+
+    const newBoard = board.map(r => r.map(c => ({ ...c })));
+    let revealed = 0;
+
+    const flood = (r, c) => {
+      if (r < 0 || r >= newBoard.length || c < 0 || c >= newBoard[0].length) return;
+      if (newBoard[r][c].isRevealed || newBoard[r][c].isFlagged || newBoard[r][c].isMine) return;
+
+      newBoard[r][c].isRevealed = true;
+      newBoard[r][c].revealedBy = playerId;
+      revealed++;
+
+      if (newBoard[r][c].neighborMines === 0) {
+        for (let dr = -1; dr <= 1; dr++) {
+          for (let dc = -1; dc <= 1; dc++) {
+            flood(r + dr, c + dc);
+          }
+        }
+      }
+    };
+
+    if (cell.isMine) {
+      // Game over
+      newBoard[row][col].isRevealed = true;
+      setBoard(newBoard);
+      setGameState('lost');
+      setMessages([...messages, { type: 'system', text: '💥 Mine hit! Game Over!' }]);
+      return;
+    }
+
+    flood(row, col);
+    setBoard(newBoard);
+    setRevealedCount(prev => prev + revealed);
+
+    // Check win condition
+    const totalCells = newBoard.length * newBoard[0].length;
+    const mineCount = difficulties[difficulty].mines;
+    const newRevealedCount = newBoard.flat().filter(c => c.isRevealed).length;
+    
+    if (newRevealedCount === totalCells - mineCount) {
+      setGameState('won');
+      setMessages([...messages, { type: 'system', text: '🎉 Victory! All mines cleared!' }]);
+    }
+  };
+
+  // Toggle flag
+  const toggleFlag = (row, col) => {
+    if (!board[row] || !board[row][col]) return;
+    
+    const cell = board[row][col];
+    if (cell.isRevealed) return;
+
+    const newBoard = board.map(r => r.map(c => ({ ...c })));
+    newBoard[row][col].isFlagged = !newBoard[row][col].isFlagged;
+    setBoard(newBoard);
+    setFlagCount(prev => newBoard[row][col].isFlagged ? prev + 1 : prev - 1);
+  };
+
+  // Handle cell click
+  const handleCellClick = (row, col, isRightClick = false) => {
+    if (gameState !== 'playing') return;
+    
+    if (isRightClick) {
+      toggleFlag(row, col);
+    } else {
+      revealCell(row, col);
+    }
+  };
+
+  // Send chat message
+  const sendMessage = () => {
+    if (!chatInput.trim()) return;
+    const player = players.find(p => p.id === playerId);
+    setMessages([...messages, { type: 'chat', player: player.name, text: chatInput, color: player.color }]);
+    setChatInput('');
+  };
+
+  // Format timer
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // Render cell with grass theme
+  const renderCell = (cell, row, col) => {
+    let content = '';
+    let cellStyle = {};
+    let cellClass = 'w-8 h-8 sm:w-10 sm:h-10 font-bold text-sm sm:text-base flex items-center justify-center transition-all hover:brightness-110 active:scale-95 relative';
+
+    if (cell.isFlagged) {
+      content = '🚩';
+      cellStyle = {
+        background: darkMode 
+          ? 'linear-gradient(135deg, #3d5a3d 0%, #2d4a2d 100%)'
+          : 'linear-gradient(135deg, #7fb069 0%, #5a8c4f 100%)',
+        boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.2)'
+      };
+      cellClass += ' text-white';
+    } else if (cell.isRevealed) {
+      if (cell.isMine) {
+        content = '💣';
+        cellStyle = {
+          background: 'linear-gradient(135deg, #8b4513 0%, #654321 100%)',
+          boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.3)'
+        };
+      } else if (cell.neighborMines > 0) {
+        content = cell.neighborMines;
+        cellStyle = {
+          background: darkMode
+            ? 'linear-gradient(135deg, #4a3520 0%, #3a2510 100%)'
+            : 'linear-gradient(135deg, #d2b48c 0%, #c19a6b 100%)',
+          boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.2)'
+        };
+        const colors = ['', 'text-blue-700', 'text-green-700', 'text-red-700', 'text-purple-700', 'text-yellow-700', 'text-pink-700', 'text-gray-800', 'text-black'];
+        cellClass += ' ' + (colors[cell.neighborMines] || 'text-gray-900');
+      } else {
+        cellStyle = {
+          background: darkMode
+            ? 'linear-gradient(135deg, #4a3520 0%, #3a2510 100%)'
+            : 'linear-gradient(135deg, #d2b48c 0%, #c19a6b 100%)',
+          boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.2)'
+        };
+      }
+      
+      // Highlight who revealed it with colored border
+      if (cell.revealedBy) {
+        const player = players.find(p => p.id === cell.revealedBy);
+        if (player) {
+          cellClass += ' ring-2 ring-opacity-60';
+          cellStyle.borderColor = player.color;
+        }
+      }
+    } else {
+      // Unrevealed grass tile
+      cellStyle = {
+        background: darkMode
+          ? 'linear-gradient(135deg, #3d5a3d 0%, #2d4a2d 100%)'
+          : 'linear-gradient(135deg, #7fb069 0%, #5a8c4f 100%)',
+        boxShadow: '0 2px 4px rgba(0,0,0,0.3), inset 0 1px 2px rgba(255,255,255,0.3)'
+      };
+      cellClass += ' hover:brightness-125';
+    }
+
+    return (
+      <button
+        key={`${row}-${col}`}
+        className={cellClass}
+        style={cellStyle}
+        onClick={() => handleCellClick(row, col, false)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          handleCellClick(row, col, true);
+        }}
+      >
+        {!cell.isRevealed && !cell.isFlagged && (
+          <span className="text-2xl opacity-40">🌿</span>
+        )}
+        {content}
+      </button>
+    );
+  };
+
+  return (
+    <div className={`min-h-screen ${darkMode ? 'bg-gray-900 text-white' : 'bg-gray-50 text-gray-900'} transition-colors`}>
+      {/* Header */}
+      <div className={`${darkMode ? 'bg-gray-800' : 'bg-white'} shadow-lg p-4`}>
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
+          <h1 className="text-2xl font-bold flex items-center gap-2">
+            💣 Teamwork Minesweeper
+          </h1>
+          <button
+            onClick={() => setDarkMode(!darkMode)}
+            className="p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+          >
+            {darkMode ? <Sun size={20} /> : <Moon size={20} />}
+          </button>
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto p-4">
+        {/* Lobby */}
+        {gameState === 'lobby' && (
+          <div className="max-w-md mx-auto mt-12">
+            <div className={`${darkMode ? 'bg-gray-800' : 'bg-white'} rounded-lg shadow-xl p-8`}>
+              <h2 className="text-2xl font-bold mb-6 text-center">Join the Team</h2>
+              
+              <input
+                type="text"
+                placeholder="Your name"
+                value={playerName}
+                onChange={(e) => setPlayerName(e.target.value)}
+                className={`w-full p-3 mb-4 border rounded-lg ${darkMode ? 'bg-gray-700 border-gray-600' : 'bg-white border-gray-300'}`}
+              />
+
+              <select
+                value={difficulty}
+                onChange={(e) => setDifficulty(e.target.value)}
+                className={`w-full p-3 mb-4 border rounded-lg ${darkMode ? 'bg-gray-700 border-gray-600' : 'bg-white border-gray-300'}`}
+              >
+                <option value="easy">Easy (9×9, 10 mines)</option>
+                <option value="medium">Medium (16×16, 40 mines)</option>
+                <option value="hard">Hard (16×30, 99 mines)</option>
+              </select>
+
+              {!roomCode ? (
+                <>
+                  <button
+                    onClick={handleCreateRoom}
+                    disabled={!playerName}
+                    className="w-full bg-blue-600 text-white p-3 rounded-lg font-semibold hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed mb-3 transition-colors"
+                  >
+                    Create Room
+                  </button>
+                  
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="Room code"
+                      value={joinCode}
+                      onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+                      className={`flex-1 p-3 border rounded-lg ${darkMode ? 'bg-gray-700 border-gray-600' : 'bg-white border-gray-300'}`}
+                    />
+                    <button
+                      onClick={handleJoinRoom}
+                      disabled={!playerName || !joinCode}
+                      className="bg-green-600 text-white px-6 rounded-lg font-semibold hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                    >
+                      Join
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div>
+                  <div className="mb-4 p-4 bg-blue-100 dark:bg-blue-900 rounded-lg text-center">
+                    <p className="text-sm font-semibold mb-1">Room Code</p>
+                    <p className="text-3xl font-bold">{roomCode}</p>
+                  </div>
+
+                  <div className="mb-4">
+                    <p className="font-semibold mb-2 flex items-center gap-2">
+                      <Users size={18} />
+                      Players ({players.length}/4)
+                    </p>
+                    {players.map((player, idx) => (
+                      <div key={player.id} className="flex items-center gap-2 mb-2">
+                        <div className="w-4 h-4 rounded-full" style={{ backgroundColor: player.color }}></div>
+                        <span>{player.name}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <button
+                    onClick={handleStartGame}
+                    disabled={players.length < 1}
+                    className="w-full bg-green-600 text-white p-3 rounded-lg font-semibold hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Start Game
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Game */}
+        {(gameState === 'playing' || gameState === 'won' || gameState === 'lost') && (
+          <div className="flex flex-col lg:flex-row gap-4 mt-4">
+            {/* Game Board */}
+            <div className="flex-1">
+              <div className={`${darkMode ? 'bg-gray-800' : 'bg-white'} rounded-lg shadow-xl p-4`}>
+                {/* Game Stats */}
+                <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2">
+                      <Timer size={18} />
+                      <span className="font-mono font-bold">{formatTime(timer)}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Flag size={18} />
+                      <span className="font-mono font-bold">{flagCount}/{difficulties[difficulty].mines}</span>
+                    </div>
+                  </div>
+                  
+                  {(gameState === 'won' || gameState === 'lost') && (
+                    <button
+                      onClick={() => setGameState('lobby')}
+                      className="bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-blue-700 transition-colors"
+                    >
+                      New Game
+                    </button>
+                  )}
+                </div>
+
+                {/* Status Banner */}
+                {gameState === 'won' && (
+                  <div className="mb-4 p-4 bg-green-100 dark:bg-green-900 rounded-lg text-center">
+                    <p className="text-xl font-bold">🎉 Victory! Time: {formatTime(timer)}</p>
+                  </div>
+                )}
+                {gameState === 'lost' && (
+                  <div className="mb-4 p-4 bg-red-100 dark:bg-red-900 rounded-lg text-center">
+                    <p className="text-xl font-bold">💥 Game Over!</p>
+                  </div>
+                )}
+
+                {/* Board */}
+                <div className="overflow-auto max-h-[70vh] p-2">
+                  <div 
+                    ref={boardRef}
+                    className="inline-block p-1 rounded-lg"
+                    style={{ 
+                      display: 'grid', 
+                      gridTemplateColumns: `repeat(${board[0]?.length || 0}, minmax(0, 1fr))`,
+                      gap: '0px',
+                      background: darkMode ? '#1a1a1a' : '#8b7355',
+                      boxShadow: '0 4px 12px rgba(0,0,0,0.4)'
+                    }}
+                  >
+                    {board.map((row, rowIdx) =>
+                      row.map((cell, colIdx) => renderCell(cell, rowIdx, colIdx))
+                    )}
+                  </div>
+                </div>
+
+                <p className="text-sm mt-4 text-center opacity-70">
+                  Left click to reveal • Right click to flag
+                </p>
+              </div>
+            </div>
+
+            {/* Sidebar */}
+            <div className="lg:w-80 flex flex-col gap-4">
+              {/* Players */}
+              <div className={`${darkMode ? 'bg-gray-800' : 'bg-white'} rounded-lg shadow-xl p-4`}>
+                <h3 className="font-bold mb-3 flex items-center gap-2">
+                  <Users size={18} />
+                  Team Members
+                </h3>
+                {players.map((player) => (
+                  <div key={player.id} className="flex items-center gap-2 mb-2 p-2 rounded" style={{ backgroundColor: player.color + '20' }}>
+                    <div className="w-3 h-3 rounded-full" style={{ backgroundColor: player.color }}></div>
+                    <span className="font-semibold">{player.name}</span>
+                    {player.id === playerId && <span className="text-xs opacity-70">(you)</span>}
+                  </div>
+                ))}
+              </div>
+
+              {/* Chat */}
+              <div className={`${darkMode ? 'bg-gray-800' : 'bg-white'} rounded-lg shadow-xl p-4 flex-1 flex flex-col`}>
+                <h3 className="font-bold mb-3 flex items-center gap-2">
+                  <MessageSquare size={18} />
+                  Team Chat
+                </h3>
+                
+                <div className="flex-1 overflow-auto mb-3 space-y-2 min-h-[200px]">
+                  {messages.map((msg, idx) => (
+                    <div key={idx} className={`text-sm ${msg.type === 'system' ? 'text-center italic opacity-70' : ''}`}>
+                      {msg.type === 'chat' && (
+                        <span>
+                          <span className="font-semibold" style={{ color: msg.color }}>{msg.player}: </span>
+                          <span>{msg.text}</span>
+                        </span>
+                      )}
+                      {msg.type === 'system' && <span>{msg.text}</span>}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+                    placeholder="Type a message..."
+                    className={`flex-1 p-2 border rounded ${darkMode ? 'bg-gray-700 border-gray-600' : 'bg-white border-gray-300'} text-sm`}
+                  />
+                  <button
+                    onClick={sendMessage}
+                    className="bg-blue-600 text-white px-4 rounded hover:bg-blue-700 transition-colors"
+                  >
+                    Send
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default TeamMinesweeper;
